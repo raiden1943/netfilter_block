@@ -2,9 +2,12 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <netinet/in.h>
+#include <netinet/ip.h>
+#include <netinet/tcp.h>
 #include <linux/types.h>
 #include <linux/netfilter.h>		/* for NF_ACCEPT */
 #include <errno.h>
+#include <string.h>
 
 #include <libnetfilter_queue/libnetfilter_queue.h>
 
@@ -19,9 +22,10 @@ void dump(unsigned char* buf, int size) {
 
 
 /* returns packet id */
-static u_int32_t print_pkt (struct nfq_data *tb)
+static u_int32_t print_pkt (struct nfq_data *tb, bool &flag)
 {
 	int id = 0;
+	bool flag = true;
 	struct nfqnl_msg_packet_hdr *ph;
 	struct nfqnl_msg_packet_hw *hwph;
 	u_int32_t mark,ifi; 
@@ -65,12 +69,27 @@ static u_int32_t print_pkt (struct nfq_data *tb)
 		printf("physoutdev=%u ", ifi);
 
 	ret = nfq_get_payload(tb, &data);
-	dump(data, ret);
+	//dump(data, ret);
 	if (ret >= 0)
 		printf("payload_len=%d ", ret);
 
 	fputc('\n', stdout);
 
+	ip* ip_header = (ip*) malloc(sizeof(ip));
+	memcpy(ip_header, data, rest);
+	if(iphdr->ip_v != IPVERSION) return id;
+	int ip_hl = 4 * ip_header->ip_hl;
+	free(ip_header);
+	
+	tcphdr tcp_header = (tcp*) malloc(sizeof(tcp));
+	memcpy(tcp_header, data + ip_hl, ret);
+	int tcp_hl = 4 * tcp_header->th_off;
+	free(tcp_header);
+	
+	int hl = ip_hl + tcp_hl;
+	if(ret <= hl) return id;
+	printf("%2x\n",(uint8_t)(data + hl));
+	
 	return id;
 }
 	
@@ -78,9 +97,10 @@ static u_int32_t print_pkt (struct nfq_data *tb)
 static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
 	      struct nfq_data *nfa, void *data)
 {
-	u_int32_t id = print_pkt(nfa);
+	bool flag = true;
+	u_int32_t id = print_pkt(nfa, flag);
 	printf("entering callback\n");
-	return nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
+	return nfq_set_verdict(qh, id, flag ? NF_ACCEPT : NF_DROP, 0, NULL);
 }
 
 int main(int argc, char **argv)
