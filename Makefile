@@ -1,11 +1,11 @@
-all : send_arp
+all : clean netfilter_block
 
-send_arp: main.o
-	g++ -g -o send_arp main.o -lpcap
+netfilter_block: main.o
+	g++ -g -o netfilter_block main.o -lpcap
 
 main.o:
 	g++ -g -c -o main.o main.cpp
 
 clean:
-	rm -f send_arp
+	rm -f netfilter_block
 	rm -f *.o
