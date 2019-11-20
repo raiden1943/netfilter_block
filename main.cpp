@@ -163,9 +163,6 @@ int main(int argc, char **argv)
 	tcp_header = (tcphdr*) malloc(sizeof(tcphdr));
 	host = argv[1];
 
-	printf("host : %s, %s\n", host, argv[1]);
-	cout << host << '\n';
-
 	struct nfq_handle *h;
 	struct nfq_q_handle *qh;
 	struct nfnl_handle *nh;
