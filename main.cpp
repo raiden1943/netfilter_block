@@ -9,7 +9,20 @@
 #include <errno.h>
 #include <string.h>
 
+#include <string>
+#include <iostream>
+
 #include <libnetfilter_queue/libnetfilter_queue.h>
+
+#define TCP_PROTOCOL 6
+
+using namespace std;
+
+const string HTTPMETHOD[6] = {"GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS"};
+const string HOSTPREFIX = "Host: ";
+string host;
+ip* ip_header;
+tcphdr* tcp_header;
 
 void dump(unsigned char* buf, int size) {
 	int i;
@@ -20,18 +33,32 @@ void dump(unsigned char* buf, int size) {
 	}
 }
 
+void cdump(unsigned char* buf, int size) {
+        int i;
+        for (i = 0; i < size; i++) {
+                if (i % 16 == 0) {
+			if(i) {
+				printf("   ");
+				for(int j = i - 16; j < i; j++)
+					printf("%c", buf[j] == 0x0a | buf[j] == 0x0d ? ' ' : buf[j]); 
+			}
+			printf("\n");
+		}
+                printf("%02x ", buf[i]);
+        }
+}
 
 /* returns packet id */
 static u_int32_t print_pkt (struct nfq_data *tb, bool &flag)
 {
 	int id = 0;
-	bool flag = true;
+	flag = true;
 	struct nfqnl_msg_packet_hdr *ph;
 	struct nfqnl_msg_packet_hw *hwph;
 	u_int32_t mark,ifi; 
 	int ret;
 	unsigned char *data;
-
+	
 	ph = nfq_get_msg_packet_hdr(tb);
 	if (ph) {
 		id = ntohl(ph->packet_id);
@@ -69,26 +96,43 @@ static u_int32_t print_pkt (struct nfq_data *tb, bool &flag)
 		printf("physoutdev=%u ", ifi);
 
 	ret = nfq_get_payload(tb, &data);
-	//dump(data, ret);
 	if (ret >= 0)
 		printf("payload_len=%d ", ret);
 
 	fputc('\n', stdout);
-
-	ip* ip_header = (ip*) malloc(sizeof(ip));
-	memcpy(ip_header, data, rest);
-	if(iphdr->ip_v != IPVERSION) return id;
+	
+	memcpy(ip_header, data, sizeof(ip));
+	if(ip_header->ip_v != IPVERSION) return id;
+	if(ip_header->ip_p != TCP_PROTOCOL) return id;
 	int ip_hl = 4 * ip_header->ip_hl;
-	free(ip_header);
 	
-	tcphdr tcp_header = (tcp*) malloc(sizeof(tcp));
-	memcpy(tcp_header, data + ip_hl, ret);
-	int tcp_hl = 4 * tcp_header->th_off;
-	free(tcp_header);
-	
+	memcpy(tcp_header, data + ip_hl, sizeof(tcphdr));
+	int tcp_hl = 4 * tcp_header->th_off;		
+
 	int hl = ip_hl + tcp_hl;
 	if(ret <= hl) return id;
-	printf("%2x\n",(uint8_t)(data + hl));
+	
+	bool isStart = false, isWrite = false;
+	for(auto method : HTTPMETHOD) {
+		if(ret - hl < method.size()) continue;
+		string str = "";
+		for(int i = 0; i < method.size(); i++) str += data[hl + i];
+		if(method == str) isStart = true;
+	}
+	
+	if(!isStart) return id;
+	string myhost = "";
+	for(int i = hl; i < ret - HOSTPREFIX.size() + 1; i++) {
+		bool cmp = true;
+		for(int j = 0; j < HOSTPREFIX.size(); j++) {
+			if(data[i + j] != HOSTPREFIX[j]) cmp = false;
+		}
+		if(cmp == true) isWrite = true, i+=HOSTPREFIX.size();
+		if(isWrite && data[i] == 0x0d && data[i + 1] == 0x0a) break;
+		if(isWrite) myhost += data[i];
+	}
+
+	flag = (host != myhost);
 	
 	return id;
 }
@@ -103,8 +147,25 @@ static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
 	return nfq_set_verdict(qh, id, flag ? NF_ACCEPT : NF_DROP, 0, NULL);
 }
 
+void usage() {
+	printf("syntax : netfilter_block <host>\n");
+	printf("sample : netfilter_block test.gilgil.net\n");
+}
+
 int main(int argc, char **argv)
 {
+	if(argc != 2) {
+		usage();
+		return -1;
+	}
+
+	ip_header = (ip*) malloc(sizeof(ip));
+	tcp_header = (tcphdr*) malloc(sizeof(tcphdr));
+	host = argv[1];
+
+	printf("host : %s, %s\n", host, argv[1]);
+	cout << host << '\n';
+
 	struct nfq_handle *h;
 	struct nfq_q_handle *qh;
 	struct nfnl_handle *nh;
@@ -180,6 +241,8 @@ int main(int argc, char **argv)
 	printf("closing library handle\n");
 	nfq_close(h);
 
+	free(ip_header);
+	free(tcp_header);
 	exit(0);
 }
 
